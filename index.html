@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>T2 Information Form</title>
+    <title>T2 Registration Form</title>
     <!-- Bootstrap CSS -->
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <!-- Firebase SDK -->
@@ -44,6 +44,19 @@
             content: " *";
             color: red;
         }
+        .alert {
+            margin-top: 20px;
+        }
+        .mobile-status {
+            font-size: 0.9rem;
+            margin-top: 5px;
+        }
+        .is-registered {
+            color: #28a745;
+        }
+        .not-registered {
+            color: #6c757d;
+        }
     </style>
 </head>
 <body>
@@ -52,9 +65,15 @@
             <div class="col-md-8 col-lg-6">
                 <div class="form-container">
                     <div class="form-header">
-                        <h2>Students Information Form</h2>
+                        <h2>Students Registration Form</h2>
                         <p>Please fill in your details accurately</p>
                     </div>
+                    
+                    <div id="alertMessage" class="alert alert-dismissible fade show" style="display: none;">
+                        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                        <span id="alertText"></span>
+                    </div>
+                    
                     <form id="userForm">
                         <div class="mb-3">
                             <label for="name" class="form-label required-field">Full Name</label>
@@ -69,6 +88,7 @@
                         <div class="mb-3">
                             <label for="mobile" class="form-label required-field">Mobile Number</label>
                             <input type="tel" class="form-control" id="mobile" required>
+                            <div id="mobileStatus" class="mobile-status not-registered">Check mobile number to see if already registered</div>
                         </div>
                         
                         <div class="mb-3">
@@ -123,7 +143,7 @@
                         </div>
                         
                         <div class="d-grid gap-2">
-                            <button type="submit" class="btn btn-primary btn-submit">Submit Information</button>
+                            <button type="submit" class="btn btn-primary btn-submit" id="submitBtn">Submit Information</button>
                         </div>
                     </form>
                 </div>
@@ -151,9 +171,96 @@
         const app = firebase.initializeApp(firebaseConfig);
         const database = firebase.database();
 
+        // DOM elements
+        const userForm = document.getElementById('userForm');
+        const mobileInput = document.getElementById('mobile');
+        const mobileStatus = document.getElementById('mobileStatus');
+        const submitBtn = document.getElementById('submitBtn');
+        const alertMessage = document.getElementById('alertMessage');
+        const alertText = document.getElementById('alertText');
+
+        // Variables
+        let isMobileRegistered = false;
+        let mobileCheckTimeout = null;
+
+        // Mobile number validation and duplicate check
+        mobileInput.addEventListener('input', function(e) {
+            // Format mobile number (digits only)
+            this.value = this.value.replace(/[^0-9]/g, '');
+            if (this.value.length > 10) {
+                this.value = this.value.slice(0, 10);
+            }
+            
+            // Clear previous timeout
+            if (mobileCheckTimeout) {
+                clearTimeout(mobileCheckTimeout);
+            }
+            
+            // Check if mobile is 10 digits
+            if (this.value.length === 10) {
+                // Show checking status
+                mobileStatus.textContent = "Checking mobile number...";
+                mobileStatus.className = "mobile-status not-registered";
+                
+                // Set timeout to prevent rapid checks
+                mobileCheckTimeout = setTimeout(() => {
+                    checkMobileRegistered(this.value);
+                }, 500);
+            } else {
+                mobileStatus.textContent = "Enter 10 digit mobile number to check";
+                mobileStatus.className = "mobile-status not-registered";
+                isMobileRegistered = false;
+            }
+        });
+
+        // Function to check if mobile is already registered
+        function checkMobileRegistered(mobile) {
+            database.ref('users').orderByChild('mobile').equalTo(mobile).once('value')
+                .then((snapshot) => {
+                    if (snapshot.exists()) {
+                        // Mobile is registered
+                        const userData = Object.values(snapshot.val())[0];
+                        mobileStatus.innerHTML = `<span class="is-registered">This mobile number is already registered to: <strong>${userData.name}</strong></span>`;
+                        isMobileRegistered = true;
+                        submitBtn.disabled = true;
+                        submitBtn.classList.add('disabled');
+                    } else {
+                        // Mobile is not registered
+                        mobileStatus.textContent = "This mobile number is available for registration";
+                        mobileStatus.className = "mobile-status is-registered";
+                        isMobileRegistered = false;
+                        submitBtn.disabled = false;
+                        submitBtn.classList.remove('disabled');
+                    }
+                })
+                .catch((error) => {
+                    console.error("Error checking mobile:", error);
+                    mobileStatus.textContent = "Error checking mobile number status";
+                    mobileStatus.className = "mobile-status not-registered";
+                });
+        }
+
+        // Show alert message
+        function showAlert(message, type) {
+            alertText.textContent = message;
+            alertMessage.className = `alert alert-${type} alert-dismissible fade show`;
+            alertMessage.style.display = 'block';
+            
+            // Auto-hide after 5 seconds
+            setTimeout(() => {
+                alertMessage.style.display = 'none';
+            }, 5000);
+        }
+
         // Form submission handler
-        document.getElementById('userForm').addEventListener('submit', function(e) {
+        userForm.addEventListener('submit', function(e) {
             e.preventDefault();
+            
+            // Check if mobile is already registered
+            if (isMobileRegistered) {
+                showAlert("This mobile number is already registered!", "danger");
+                return;
+            }
             
             // Get form values
             const name = document.getElementById('name').value;
@@ -163,6 +270,12 @@
             const bloodGroup = document.getElementById('bloodGroup').value;
             const religion = document.querySelector('input[name="religion"]:checked').value;
             const casteDetails = document.getElementById('casteDetails').value;
+            
+            // Validate mobile number
+            if (mobile.length !== 10) {
+                showAlert("Please enter a valid 10-digit mobile number", "danger");
+                return;
+            }
             
             // Create user object
             const userData = {
@@ -176,25 +289,28 @@
                 timestamp: firebase.database.ServerValue.TIMESTAMP
             };
             
+            // Disable submit button during processing
+            submitBtn.disabled = true;
+            submitBtn.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> Submitting...';
+            
             // Save to Firebase
             const newUserRef = database.ref('users').push();
             newUserRef.set(userData)
                 .then(() => {
-                    alert('Information submitted successfully!');
-                    document.getElementById('userForm').reset();
+                    showAlert("Registration successful! Thank you for your submission.", "success");
+                    userForm.reset();
+                    mobileStatus.textContent = "Check mobile number to see if already registered";
+                    mobileStatus.className = "mobile-status not-registered";
+                    isMobileRegistered = false;
                 })
                 .catch((error) => {
                     console.error('Error saving data: ', error);
-                    alert('There was an error submitting your information. Please try again.');
+                    showAlert("There was an error submitting your information. Please try again.", "danger");
+                })
+                .finally(() => {
+                    submitBtn.disabled = false;
+                    submitBtn.innerHTML = 'Submit Information';
                 });
-        });
-
-        // Mobile number validation
-        document.getElementById('mobile').addEventListener('input', function(e) {
-            this.value = this.value.replace(/[^0-9]/g, '');
-            if (this.value.length > 10) {
-                this.value = this.value.slice(0, 10);
-            }
         });
     </script>
 </body>
